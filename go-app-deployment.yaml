@@ -1,3 +1,13 @@
+# Api Deployment
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fiber-ns
+  labels:
+    app: go-fiber-app
+spec: {}
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -6,6 +16,7 @@ metadata:
   labels:
     app: go-fiber-app
   name: go-fiber-app
+  namespace: fiber-ns
 spec:
   replicas: 1
   selector:
@@ -20,27 +31,45 @@ spec:
     spec:
       containers:
       - name: go-fiber-app
-        image: quay.io/rh_ee_mrudraia/go-fiber-app:v4
+        image: quay.io/rh_ee_mrudraia/go-fiber-app:v9
         ports:
         - containerPort: 8080
         env:
         - name: DB_HOST
-          value: "db"
+          valueFrom:
+            secretKeyRef:
+              name: mysecret
+              key: database_host
+          
         - name: DB_USER
-          value: "postgres"
+          valueFrom:
+            secretKeyRef:
+              name: mysecret
+              key: postgres_user
+          
         - name: DB_PASS
-          value: "password"
+          valueFrom:
+            secretKeyRef:
+              name: mysecret
+              key: postgres_password
+    
         - name: DB_NAME
-          value: "fiber_demo"
+          valueFrom:
+            secretKeyRef:
+              name: mysecret
+              key: database_name
+          
         resources: {}
         
 status: {}
 
+# Database Postgres Deployment
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres-deploy
+  namespace: fiber-ns
   labels:
     name: postgres-deploy
     app: go-fiber-app
@@ -59,27 +88,59 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: quay.io/rh_ee_mrudraia/postgres:v3
+        image: quay.io/rh_ee_mrudraia/postgres:v5
         ports:  
         - containerPort:  5432
         env:
           - name: POSTGRES_USER
-            value: "postgres"
+            valueFrom:
+              secretKeyRef:
+                name: mysecret
+                key: postgres_user
+            
           - name: POSTGRES_PASSWORD
-            value: "password"
-          - name: POSTGRES_HOST_AUtH_METHOD
-            value: trust
+            valueFrom:
+              secretKeyRef:
+                name: mysecret
+                key: postgres_password
 
+          - name: POSTGRES_HOST_AUtH_METHOD
+            valueFrom:
+              configMapKeyRef:
+                name: myconfigmap
+                key: AUtH_METHOD
+
+            
+          - name: PGDATA
+            valueFrom:
+              configMapKeyRef:
+                name: myconfigmap
+                key: PGDATA
+
+        volumeMounts:
+          - name: postgresdb
+            mountPath: /var/lib/postgresql/data
+            subpath: pgdata
+
+      volumes:
+      - name: postgresdb
+        persistentVolumeClaim:
+          claimName: mypvc
+            
+
+
+# Service for Application to Database
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: db
+  namespace: fiber-ns
   labels:
     name: postgres-service
     app: go-fiber-app
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
   - port: 5432
     targetPort: 5432
@@ -87,36 +148,69 @@ spec:
     name: postgres-pod
     app: go-fiber-app
 
+
+# service for Application
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: go-app-service
+  namespace: fiber-ns
 spec:
-  type: NodePort
+  type: ClusterIP
   ports:
-    - protocol: TCP
-      port: 8080
-      targetPort: 8080
+  - port: 8080
+    targetPort: 8080
   selector:
     app: go-fiber-app
 
 ---
-# apiVersion: extensions/v1beta1
-# kind: Ingress
-# metadata:
-#   name: go-app-ingress
-#   annotations:
-#     kubernetes.io/ingress.class: "nginx"
-#     nginx.ingress.kubernetes.io/ssl-redirect: "false"
-# spec:
-#   rules:
-#   - host: k8s.local
-#     http:
-#       paths:
-#       - path: /books
-#         backend:
-#           serviceName: go-app-service
-#           servicePort: 80
+
+# Secrets for confidential data
+---
+apiVersion: v1
+kind: Secret
+metadata: 
+  name: mysecret
+  namespace: fiber-ns
+type: Opaque
+data:
+  database_host: ZGI=
+  database_name: ZmliZXJfZGVtbw==
+  postgres_user: cG9zdGdyZXM=
+  postgres_password: cGFzc3dvcmQ=
+
+---
+# ConfigMap for configuration data
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myconfigmap
+  namespace: fiber-ns
+data:
+  AUtH_METHOD: trust
+  PGDATA: var/lib/postgresql/data/pgdata
+
+---
+
+# Persistent Volume for data persistence
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mypvc
+  namespace: fiber-ns
+  labels:
+    app: go-fiber-app
+spec:
+  storageClassName: gp2-csi
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+
+
+
         
   
